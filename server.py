@@ -4,14 +4,19 @@ import json
 import time
 import threading
 import random
+import os
+import asyncio
 from typing import List, Dict, Optional, Any
 from datetime import datetime, timedelta
 
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, BackgroundTasks
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from qwen_ai import QwenAiClient
+from qwen_ai.vless_proxy import get_subscription_pool, init_subscription_pool_from_env
+from qwen_ai.node_storage import get_node_storage
+from qwen_ai.node_tester import get_node_tester
 
 
 class ChatCompletionRequest(BaseModel):
@@ -97,12 +102,34 @@ class ChatSessionManager:
 # Global session manager
 session_manager = ChatSessionManager(ttl_hours=24)
 
+# Global subscription proxy pool
+subscription_pool = None
+
+# 初始化订阅代理池
+async def init_proxy_pool():
+    """初始化订阅代理池"""
+    global subscription_pool
+    try:
+        subscription_pool = await init_subscription_pool_from_env()
+        print(f"[Proxy] Subscription pool initialized with pattern: {subscription_pool.pattern}")
+        stats = subscription_pool.get_stats()
+        print(f"[Proxy] Available nodes: {stats.get('current_pattern', {}).get('available', 0)}")
+    except Exception as e:
+        print(f"[Proxy] Failed to initialize subscription pool: {e}")
+        subscription_pool = None
+
 
 app = FastAPI(
     title="Qwen AI OpenAI Compatible API",
-    description="OpenAI compatible API for Qwen AI (chat.qwen.ai) with context support",
-    version="0.2.0"
+    description="OpenAI compatible API for Qwen AI (chat.qwen.ai) with context support and Vless proxy pool",
+    version="0.3.0"
 )
+
+
+@app.on_event("startup")
+async def startup_event():
+    """服务启动时初始化"""
+    await init_proxy_pool()
 
 
 SUPPORTED_MODELS = [
@@ -111,6 +138,7 @@ SUPPORTED_MODELS = [
     "qwen3.5-omni-plus",
     "qwen3.5-flash",
     "qwen3.5-max-preview",
+    "qwen3.5-max-2026-03-08",
     "qwen3.6-plus-preview",
     "qwen3.5-397b-a17b",
     "qwen3.5-122b-a10b",
@@ -542,15 +570,137 @@ async def check_tokens_health_get(
 async def root():
     return {
         "service": "Qwen AI OpenAI Compatible API",
-        "version": "0.2.0",
-        "features": ["context_support", "streaming", "non_streaming", "token_health_check"],
+        "version": "0.3.0",
+        "features": ["context_support", "streaming", "non_streaming", "token_health_check", "vless_proxy_pool"],
         "endpoints": {
             "chat_completions": "/v1/chat/completions",
             "models": "/v1/models",
             "health": "/health",
-            "tokens_health": "/v1/tokens/health"
+            "tokens_health": "/v1/tokens/health",
+            "proxy_stats": "/v1/proxy/stats",
+            "proxy_refresh": "/v1/proxy/refresh",
+            "proxy_test": "/v1/proxy/test"
         }
     }
+
+
+# ==================== Vless 代理管理 API ====================
+
+class ProxyRefreshRequest(BaseModel):
+    test_nodes: bool = True
+
+
+class ProxyTestRequest(BaseModel):
+    pattern: Optional[str] = None
+    max_concurrent: int = 10
+
+
+@app.get("/v1/proxy/stats")
+async def proxy_stats():
+    """获取代理池统计信息"""
+    global subscription_pool
+    
+    if subscription_pool is None:
+        return {
+            "enabled": False,
+            "message": "Proxy pool not initialized"
+        }
+    
+    try:
+        stats = subscription_pool.get_stats()
+        return {
+            "enabled": True,
+            "stats": stats
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/v1/proxy/refresh")
+async def proxy_refresh(request: ProxyRefreshRequest, background_tasks: BackgroundTasks):
+    """刷新订阅并测试节点"""
+    global subscription_pool
+    
+    if subscription_pool is None:
+        raise HTTPException(status_code=503, detail="Proxy pool not initialized")
+    
+    try:
+        result = await subscription_pool.refresh_subscriptions(test_nodes=request.test_nodes)
+        return {
+            "success": True,
+            "result": result
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/v1/proxy/test")
+async def proxy_test(request: ProxyTestRequest):
+    """测试代理节点"""
+    global subscription_pool
+    
+    if subscription_pool is None:
+        raise HTTPException(status_code=503, detail="Proxy pool not initialized")
+    
+    try:
+        tester = get_node_tester()
+        await tester.init()
+        
+        results = await tester.test_all_available_nodes(pattern=request.pattern)
+        summary = tester.get_test_summary(results)
+        
+        return {
+            "success": True,
+            "summary": summary,
+            "results": [
+                {
+                    "identifier": r.identifier,
+                    "success": r.success,
+                    "latency": r.latency,
+                    "error": r.error
+                }
+                for r in results
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/proxy/nodes")
+async def proxy_nodes(pattern: Optional[str] = None, only_available: bool = True):
+    """获取代理节点列表"""
+    global subscription_pool
+    
+    if subscription_pool is None:
+        raise HTTPException(status_code=503, detail="Proxy pool not initialized")
+    
+    try:
+        nodes = subscription_pool.get_available_nodes(pattern)
+        
+        if only_available:
+            nodes = [n for n in nodes if n.is_available]
+        
+        return {
+            "total": len(nodes),
+            "nodes": [
+                {
+                    "identifier": n.identifier,
+                    "name": n.name,
+                    "address": n.address,
+                    "port": n.port,
+                    "network": n.network,
+                    "tls": n.tls,
+                    "is_available": n.is_available,
+                    "fail_count": n.fail_count,
+                    "success_count": n.success_count,
+                    "average_latency": n.average_latency,
+                    "last_tested": n.last_tested
+                }
+                for n in nodes
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

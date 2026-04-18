@@ -3,8 +3,11 @@
 import json
 import uuid
 import time
+import os
 import requests
 from typing import Dict, Optional, Tuple, Any
+
+from .proxy_adapter import ProxyManager, get_proxy_manager, init_proxy_manager
 
 
 class QwenAiAdapter:
@@ -40,19 +43,29 @@ class QwenAiAdapter:
         'qwen3-vl': 'qwen3-vl-235b-a22b',
         'qwen3-omni': 'qwen3-omni-flash',
         'qwen2.5': 'qwen2.5-max',
+        'qwen3.5-max-preview': 'qwen3.5-max-2026-03-08',
     }
     
-    def __init__(self, token: str, cookies: Optional[str] = None):
+    def __init__(self, token: str, cookies: Optional[str] = None, use_proxy: bool = True):
         """Initialize Qwen AI Adapter
         
         Args:
             token: JWT token from chat.qwen.ai Local Storage
             cookies: Optional cookies string for enhanced compatibility
+            use_proxy: Whether to use proxy (Vless or HTTP proxy)
         """
         self.token = token
         self.cookies = cookies
         self._force_thinking = None
-        self.session = requests.Session()
+        self.use_proxy = use_proxy
+        
+        # 初始化代理管理器
+        if use_proxy:
+            self.proxy_manager = init_proxy_manager()
+            self.session = self.proxy_manager.create_session(use_vless=True)
+        else:
+            self.session = requests.Session()
+        
         self.session.timeout = 120
     
     def _uuid(self) -> str:

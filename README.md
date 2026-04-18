@@ -15,6 +15,10 @@
 - 🎨 **图片生成** - 支持 Qwen 的图片生成功能
 - 🔄 **Token 轮询** - 多 Token 随机负载均衡
 - ✅ **健康检查** - Token 可用性检测接口
+- 🌐 **Vless 代理池** - 支持从订阅 URL 获取和管理 Vless 节点
+- 📍 **节点筛选** - 按规则筛选节点（如 CF优选-电信）
+- 🔍 **健康检测** - 自动测试节点可用性和延迟
+- 📊 **代理管理** - 完整的代理池管理 API
 
 ## 📦 安装
 
@@ -227,7 +231,7 @@ print(response.choices[0].message.content)
 
 ## 🔧 配置选项
 
-启动参数：
+### 启动参数
 
 ```bash
 python start_server.py --host 0.0.0.0 --port 8080
@@ -239,6 +243,155 @@ python start_server.py --host 0.0.0.0 --port 8080
 | --port | 8000 | 监听端口 |
 | --reload | False | 开发模式自动重载 |
 
+### 代理配置
+
+本项目支持 Vless 协议代理池，可用于 IP 轮换和访问优化。
+
+#### 方式一：环境变量配置
+
+```bash
+# 设置 Vless 代理（支持多个，用逗号、分号或换行分隔）
+export VLESS_PROXIES="vless://uuid@host1:443?security=tls...,vless://uuid@host2:443?security=tls..."
+
+# 或指定代理配置文件
+export VLESS_PROXY_FILE="/path/to/proxy_config.txt"
+
+# 同时支持普通 HTTP/HTTPS 代理
+export HTTP_PROXY="http://proxy.example.com:8080"
+export HTTPS_PROXY="http://proxy.example.com:8080"
+```
+
+#### 方式二：配置文件
+
+创建 `proxy_config.txt` 文件（参考 `proxy_config.example.txt`）：
+
+```
+# 每行一个 Vless URI
+vless://12345678-1234-1234-1234-123456789abc@example.com:443?security=tls&type=tcp&sni=example.com#Proxy1
+vless://87654321-4321-4321-4321-cba987654321@example2.com:443?security=tls&type=ws&path=/ws#Proxy2
+```
+
+然后设置环境变量：
+
+```bash
+export VLESS_PROXY_FILE="proxy_config.txt"
+```
+
+#### Vless URI 格式
+
+```
+vless://{uuid}@{address}:{port}?{parameters}#{remark}
+```
+
+**参数说明：**
+
+| 参数 | 说明 | 示例 |
+|------|------|------|
+| uuid | 用户 ID | 12345678-1234-1234-1234-123456789abc |
+| address | 服务器地址 | example.com |
+| port | 服务器端口 | 443 |
+| security | 安全类型 | tls, reality, none |
+| type | 传输类型 | tcp, ws, grpc |
+| host | 主机名 | example.com |
+| path | WebSocket 路径 | /ws |
+| sni | TLS SNI | example.com |
+| fp | 指纹 | chrome, firefox, safari |
+| pbk | Reality 公钥 | PublicKey |
+| sid | Reality ShortID | ShortID |
+
+#### 代理池特性
+
+- **自动轮换**：支持轮询和随机两种策略
+- **健康检查**：自动检测代理可用性
+- **故障转移**：自动切换到健康代理
+- **多协议支持**：同时支持 Vless 和普通 HTTP 代理
+
+### 订阅代理配置（推荐）
+
+支持从订阅URL自动获取和筛选 Vless 节点。
+
+#### 快速配置
+
+```bash
+# 运行配置脚本
+python setup_proxy.py
+```
+
+#### 手动配置
+
+创建 `.env` 文件：
+
+```bash
+# 订阅URL
+VLESS_SUBSCRIPTION_URLS=https://example.com/subscription
+
+# 节点匹配规则（如 CF优选-电信）
+VLESS_SUBSCRIPTION_PATTERNS=CF优选-电信
+
+# 启动时自动刷新
+VLESS_AUTO_REFRESH_ON_START=true
+```
+
+#### 启动服务
+
+```bash
+# 使用代理启动脚本
+python start_with_proxy.py
+```
+
+#### 代理管理 API
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/v1/proxy/stats` | GET | 获取代理统计 |
+| `/v1/proxy/nodes` | GET | 获取节点列表 |
+| `/v1/proxy/refresh` | POST | 刷新订阅 |
+| `/v1/proxy/test` | POST | 测试节点 |
+
+详细配置说明请参考 [PROXY_SETUP.md](PROXY_SETUP.md)
+
+## 🌐 代理功能详解
+
+### 订阅管理
+
+- **自动获取**：从订阅 URL 自动获取 Vless 节点
+- **规则筛选**：按节点名称规则筛选（如 `CF优选-电信`）
+- **本地存储**：将节点存储到本地文件，持久化管理
+
+### 节点测试
+
+- **并发测试**：同时测试多个节点的可用性
+- **延迟测量**：测试节点响应时间
+- **健康标记**：自动标记可用/不可用节点
+
+### 代理管理 API
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/v1/proxy/stats` | GET | 获取代理池统计信息 |
+| `/v1/proxy/nodes` | GET | 获取节点列表 |
+| `/v1/proxy/refresh` | POST | 刷新订阅并测试节点 |
+| `/v1/proxy/test` | POST | 测试指定节点 |
+
+### 使用示例
+
+**刷新订阅**：
+```bash
+curl -X POST http://localhost:8000/v1/proxy/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"test_nodes": true}'
+```
+
+**查看统计**：
+```bash
+curl http://localhost:8000/v1/proxy/stats
+```
+
+**获取节点**：
+```bash
+curl http://localhost:8000/v1/proxy/nodes
+```
+
 ## 🎯 支持模型
 
 | 模型 | 描述 |
@@ -246,6 +399,7 @@ python start_server.py --host 0.0.0.0 --port 8080
 | qwen3.6-plus | 最新旗舰模型 |
 | qwen3.5-plus | 高性能模型 |
 | qwen3.5-flash | 快速响应模型 |
+| qwen3.5-max-2026-03-08 | 最大上下文模型（预览版） |
 | qwen3-max | 最大参数模型 |
 | qwen3-coder | 代码生成模型 |
 | qwen2.5-max | 稳定版本模型 |

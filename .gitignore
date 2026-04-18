@@ -59,3 +59,10 @@ htmlcov/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+
+# Node storage
+vless_nodes.json
+*.nodes.json
+
+# Development
+test_*.py

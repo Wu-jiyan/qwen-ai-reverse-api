@@ -1,0 +1,13 @@
+# Vless 代理配置文件示例
+# 每行一个 Vless URI，以 # 开头的行将被忽略
+
+# 格式: vless://uuid@address:port?参数#备注
+
+# TCP 传输示例
+vless://12345678-1234-1234-1234-123456789abc@example.com:443?security=tls&type=tcp&host=example.com&sni=example.com#Proxy1
+
+# WebSocket 传输示例  
+vless://12345678-1234-1234-1234-123456789abc@example.com:443?security=tls&type=ws&host=example.com&path=/ws&sni=example.com#Proxy2
+
+# Reality 示例
+vless://12345678-1234-1234-1234-123456789abc@example.com:443?security=reality&type=tcp&sni=www.google.com&fp=chrome&pbk=PublicKey&sid=ShortID#Proxy3
