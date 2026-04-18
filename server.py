@@ -9,20 +9,8 @@ import asyncio
 from typing import List, Dict, Optional, Any
 from datetime import datetime, timedelta
 
-# 加载 .env 文件
-try:
-    from dotenv import load_dotenv
-    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
-    if os.path.exists(env_path):
-        load_dotenv(env_path, override=True)
-        print(f"[Server] 已加载环境变量: {env_path}")
-except ImportError:
-    pass
-
 from fastapi import FastAPI, HTTPException, Header, BackgroundTasks
-from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from qwen_ai import QwenAiClient
@@ -140,15 +128,6 @@ app = FastAPI(
     version="0.3.0"
 )
 
-# 添加 CORS 支持
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 
 @app.on_event("startup")
 async def startup_event():
@@ -210,7 +189,6 @@ async def chat_completions(
     if not jwt_token_string:
         raise HTTPException(status_code=401, detail="Invalid Authorization header format")
 
-    start_time = time.time()
     try:
         jwt_token = select_random_token(jwt_token_string)
 
@@ -219,25 +197,14 @@ async def chat_completions(
         existing_chat_id = request.chat_id
 
         if request.stream:
-            response = StreamingResponse(
+            return StreamingResponse(
                 openai_stream(client, request.model, request.messages, request.temperature, existing_chat_id, AUTO_DELETE_CHAT),
                 media_type="text/event-stream"
             )
-            # 记录成功请求
-            latency = time.time() - start_time
-            request_stats.record_request(success=True, latency=latency)
-            return response
         else:
-            response = await openai_non_stream(client, request.model, request.messages, request.temperature, existing_chat_id, AUTO_DELETE_CHAT)
-            # 记录成功请求
-            latency = time.time() - start_time
-            request_stats.record_request(success=True, latency=latency)
-            return response
+            return await openai_non_stream(client, request.model, request.messages, request.temperature, existing_chat_id, AUTO_DELETE_CHAT)
 
     except Exception as e:
-        # 记录失败请求
-        latency = time.time() - start_time
-        request_stats.record_request(success=False, latency=latency)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -756,225 +723,6 @@ async def proxy_nodes(pattern: Optional[str] = None, only_available: bool = True
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# 请求统计
-class RequestStats:
-    """请求统计管理器"""
-    def __init__(self):
-        self.total_requests = 0
-        self.successful_requests = 0
-        self.failed_requests = 0
-        self.request_history = []  # 最近100条请求记录
-        self.lock = threading.Lock()
-    
-    def record_request(self, success: bool = True, latency: float = 0):
-        """记录请求"""
-        with self.lock:
-            self.total_requests += 1
-            if success:
-                self.successful_requests += 1
-            else:
-                self.failed_requests += 1
-            
-            # 记录历史
-            self.request_history.append({
-                'time': datetime.now().isoformat(),
-                'success': success,
-                'latency': latency
-            })
-            
-            # 只保留最近100条
-            if len(self.request_history) > 100:
-                self.request_history = self.request_history[-100:]
-    
-    def get_stats(self) -> Dict[str, Any]:
-        """获取统计信息"""
-        with self.lock:
-            # 计算成功率
-            success_rate = (self.successful_requests / self.total_requests * 100) if self.total_requests > 0 else 0
-            
-            # 计算平均延迟
-            avg_latency = sum(r['latency'] for r in self.request_history) / len(self.request_history) if self.request_history else 0
-            
-            # 按小时分组统计请求数（用于图表）
-            hourly_data = {}
-            now = datetime.now()
-            for i in range(24):
-                hour_key = (now - timedelta(hours=i)).strftime('%H:00')
-                hourly_data[hour_key] = 0
-            
-            for req in self.request_history:
-                req_time = datetime.fromisoformat(req['time'])
-                hour_key = req_time.strftime('%H:00')
-                if hour_key in hourly_data:
-                    hourly_data[hour_key] += 1
-            
-            # 转换为图表数据格式（最近12小时）
-            chart_labels = []
-            chart_data = []
-            for i in range(11, -1, -1):
-                hour_key = (now - timedelta(hours=i)).strftime('%H:00')
-                chart_labels.append(hour_key)
-                chart_data.append(hourly_data.get(hour_key, 0))
-            
-            return {
-                'total_requests': self.total_requests,
-                'successful_requests': self.successful_requests,
-                'failed_requests': self.failed_requests,
-                'success_rate': round(success_rate, 2),
-                'average_latency': round(avg_latency, 2),
-                'request_history': self.request_history[-20:],  # 最近20条
-                'chart_labels': chart_labels,
-                'chart_data': chart_data
-            }
-
-
-# 全局请求统计实例
-request_stats = RequestStats()
-
-
-@app.get("/v1/admin/stats")
-async def get_admin_stats():
-    """获取管理后台统计数据"""
-    try:
-        stats = request_stats.get_stats()
-        
-        # 获取代理统计
-        proxy_stats = {"total_nodes": 0, "available_nodes": 0, "avg_latency": 0}
-        if subscription_pool and subscription_pool._initialized:
-            nodes = subscription_pool.get_available_nodes()
-            available = [n for n in nodes if n.is_available]
-            proxy_stats = {
-                "total_nodes": len(nodes),
-                "available_nodes": len(available),
-                "avg_latency": sum(n.average_latency for n in available) / len(available) if available else 0
-            }
-        
-        return {
-            **stats,
-            **proxy_stats
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# 管理后台路由
-@app.get("/admin", response_class=HTMLResponse)
-async def admin_dashboard():
-    """管理后台页面"""
-    try:
-        with open("templates/admin.html", "r", encoding="utf-8") as f:
-            return f.read()
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Admin template not found")
-
-
-@app.get("/v1/admin/config")
-async def get_admin_config():
-    """获取当前配置（从环境变量）"""
-    return {
-        "port": os.environ.get("PORT", "8000"),
-        "debug": os.environ.get("DEBUG", "false").lower() == "true",
-        "auto_delete_chat": os.environ.get("AUTO_DELETE_CHAT", "false").lower() == "true",
-        "proxy_enabled": os.environ.get("PROXY_ENABLED", "false").lower() == "true",
-        "subscription_url": os.environ.get("VLESS_SUBSCRIPTION_URLS", ""),
-        "pattern": os.environ.get("VLESS_SUBSCRIPTION_PATTERNS", "")
-    }
-
-
-class ConfigUpdateRequest(BaseModel):
-    port: str = "8000"
-    debug: bool = False
-    auto_delete_chat: bool = False
-    proxy_enabled: bool = False
-    subscription_url: str = ""
-    pattern: str = ""
-
-
-@app.post("/v1/admin/config")
-async def update_admin_config(request: ConfigUpdateRequest):
-    """更新配置（保存到 .env 文件）"""
-    import traceback
-    try:
-        env_file = ".env"
-        env_content = f"""# Qwen AI Reverse API 配置
-# 更新时间: {datetime.now().isoformat()}
-
-# ==================== 服务配置 =====================
-HOST="0.0.0.0"
-PORT="{request.port}"
-DEBUG={'true' if request.debug else 'false'}
-AUTO_DELETE_CHAT={'true' if request.auto_delete_chat else 'false'}
-
-# ==================== 代理配置 =====================
-PROXY_ENABLED={'true' if request.proxy_enabled else 'false'}
-
-# ==================== Vless 订阅配置 =====================
-VLESS_SUBSCRIPTION_URLS="{request.subscription_url}"
-VLESS_SUBSCRIPTION_PATTERNS="{request.pattern}"
-VLESS_AUTO_REFRESH_ON_START=true
-VLESS_STORAGE_FILE="vless_nodes.json"
-"""
-
-        # 获取当前工作目录和文件路径
-        cwd = os.getcwd()
-        file_path = os.path.abspath(env_file)
-
-        # 备份现有配置
-        if os.path.exists(env_file):
-            backup = f"{env_file}.backup"
-            try:
-                with open(env_file, 'r', encoding='utf-8') as f:
-                    existing = f.read()
-                with open(backup, 'w', encoding='utf-8') as f:
-                    f.write(existing)
-            except Exception as backup_error:
-                print(f"[Config] 备份配置失败: {backup_error}")
-
-        # 写入新配置
-        try:
-            with open(env_file, 'w', encoding='utf-8') as f:
-                f.write(env_content)
-            print(f"[Config] 配置已写入文件: {file_path}")
-        except Exception as write_error:
-            error_msg = f"写入文件失败: {str(write_error)}"
-            print(f"[Config] {error_msg}")
-            return {"success": False, "message": error_msg}
-
-        # 验证文件是否写入成功
-        if not os.path.exists(env_file):
-            return {"success": False, "message": "文件写入后未找到"}
-
-        # 更新当前环境变量
-        os.environ["PORT"] = str(request.port)
-        os.environ["DEBUG"] = "true" if request.debug else "false"
-        os.environ["AUTO_DELETE_CHAT"] = "true" if request.auto_delete_chat else "false"
-        os.environ["PROXY_ENABLED"] = "true" if request.proxy_enabled else "false"
-        os.environ["VLESS_SUBSCRIPTION_URLS"] = request.subscription_url
-        os.environ["VLESS_SUBSCRIPTION_PATTERNS"] = request.pattern
-
-        # 更新全局变量
-        global AUTO_DELETE_CHAT
-        AUTO_DELETE_CHAT = request.auto_delete_chat
-
-        return {
-            "success": True,
-            "message": "配置已保存",
-            "file_path": file_path,
-            "config": {
-                "port": request.port,
-                "debug": request.debug,
-                "auto_delete_chat": request.auto_delete_chat,
-                "proxy_enabled": request.proxy_enabled,
-                "subscription_url": request.subscription_url,
-                "pattern": request.pattern
-            }
-        }
-    except Exception as e:
-        error_detail = traceback.format_exc()
-        print(f"[Config] 保存配置时出错:\n{error_detail}")
-        raise HTTPException(status_code=500, detail=f"保存配置失败: {str(e)}")
 
 
 if __name__ == "__main__":

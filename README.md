@@ -52,10 +52,27 @@ cp .env.example .env
 # 编辑 .env 文件，填写你的配置
 ```
 
-### 2. 启动服务
+### 3. 启动服务
 
 ```bash
-python server.py
+python start_server.py
+```
+
+**启动参数：**
+| 参数 | 说明 |
+|------|------|
+| `--host` | 监听地址（默认：0.0.0.0） |
+| `--port` | 监听端口（默认：8000） |
+| `--reload` | 开发模式自动重载 |
+| `--no-proxy` | 禁用代理功能 |
+
+**启用代理功能：**
+```bash
+# 在 .env 文件中设置
+ENABLE_PROXY=true
+
+# 启动服务
+python start_server.py
 ```
 
 ### 3. 测试 API
@@ -123,15 +140,6 @@ POST /v1/chat/completions
 # .env 文件配置
 AUTO_DELETE_CHAT=true
 ```
-
-### 管理后台
-
-访问 `http://localhost:8000/admin` 打开管理后台，可以：
-- 查看系统状态和统计信息
-- 管理代理节点（刷新订阅、测试节点）
-- 查看可用模型列表
-- 查看系统日志
-- 修改系统设置
 
 ### Token 健康检查
 
@@ -275,7 +283,32 @@ python start_server.py --host 0.0.0.0 --port 8080
 
 本项目支持 Vless 协议代理池，可用于 IP 轮换和访问优化。
 
-#### 方式一：环境变量配置
+#### 启用代理
+
+在 `.env` 文件中设置：
+
+```bash
+# 启用代理功能
+ENABLE_PROXY=true
+
+# 配置订阅URL（支持多个，用逗号分隔）
+VLESS_SUBSCRIPTION_URLS="https://example.com/subscription"
+
+# 节点匹配规则（如 CF优选-电信）
+VLESS_SUBSCRIPTION_PATTERNS="CF优选-电信"
+```
+
+#### 启动服务
+
+```bash
+# 启用代理启动
+python start_server.py
+
+# 禁用代理启动（即使配置了代理）
+python start_server.py --no-proxy
+```
+
+#### 传统代理配置（可选）
 
 ```bash
 # 设置 Vless 代理（支持多个，用逗号、分号或换行分隔）
@@ -287,22 +320,6 @@ export VLESS_PROXY_FILE="/path/to/proxy_config.txt"
 # 同时支持普通 HTTP/HTTPS 代理
 export HTTP_PROXY="http://proxy.example.com:8080"
 export HTTPS_PROXY="http://proxy.example.com:8080"
-```
-
-#### 方式二：配置文件
-
-创建 `proxy_config.txt` 文件（参考 `proxy_config.example.txt`）：
-
-```
-# 每行一个 Vless URI
-vless://12345678-1234-1234-1234-123456789abc@example.com:443?security=tls&type=tcp&sni=example.com#Proxy1
-vless://87654321-4321-4321-4321-cba987654321@example2.com:443?security=tls&type=ws&path=/ws#Proxy2
-```
-
-然后设置环境变量：
-
-```bash
-export VLESS_PROXY_FILE="proxy_config.txt"
 ```
 
 #### Vless URI 格式
@@ -334,19 +351,23 @@ vless://{uuid}@{address}:{port}?{parameters}#{remark}
 - **故障转移**：自动切换到健康代理
 - **多协议支持**：同时支持 Vless 和普通 HTTP 代理
 
-### 订阅代理配置（可选）
+### 订阅代理配置（推荐）
 
 支持从订阅URL自动获取和筛选 Vless 节点。
 
-#### 配置方法
+#### 快速配置
+
+```bash
+# 运行配置脚本
+python setup_proxy.py
+```
+
+#### 手动配置
 
 创建 `.env` 文件：
 
 ```bash
-# 启用代理功能
-PROXY_ENABLED=true
-
-# 订阅URL（多个用逗号分隔）
+# 订阅URL
 VLESS_SUBSCRIPTION_URLS=https://example.com/subscription
 
 # 节点匹配规则（如 CF优选-电信）
@@ -359,8 +380,8 @@ VLESS_AUTO_REFRESH_ON_START=true
 #### 启动服务
 
 ```bash
-# 正常启动（代理会根据配置自动启用/禁用）
-python start_server.py
+# 使用代理启动脚本
+python start_with_proxy.py
 ```
 
 #### 代理管理 API
@@ -448,8 +469,6 @@ qwen-ai-reverse-api/
 ├── .env.example           # 环境变量示例
 ├── proxy_config.example.txt # 代理配置示例
 ├── PROXY_SETUP.md         # 代理配置文档
-├── templates/             # HTML 模板
-│   └── admin.html         # 管理后台页面
 └── README.md              # 文档
 ```
 
