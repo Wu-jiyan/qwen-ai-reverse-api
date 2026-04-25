@@ -98,6 +98,9 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 ### 画图功能
 ![画图功能](docs/4.png)
 
+### 深度思考
+![深度思考](docs/5.png)
+
 ## 🔧 账号工具
 
 ### 获取 JWT Token
