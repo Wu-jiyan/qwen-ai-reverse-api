@@ -63,6 +63,23 @@ dmypy.json
 # Node storage
 vless_nodes.json
 *.nodes.json
+node_storage.json
+
+# JWT token storage
+jwt_tokens.json
+
+# Account pool (sensitive data)
+pool/
+pool/config.json
+pool/.env
+pool/jwt_tokens.json
+
+# Sensitive config files
+config.json
+accounts.json
+*.credentials.json
 
 # Development
 test_*.py
+get_jwt.py
+jwt_0d1n3a_shsstu.cn.txt

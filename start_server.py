@@ -34,22 +34,50 @@ def load_env():
         print("[Config] 未找到 .env 文件，使用默认配置")
 
 
-async def init_proxy_pool():
-    """初始化代理池"""
+async def init_proxy_pool(refresh: bool = False):
+    """初始化代理池
+
+    Args:
+        refresh: 是否强制刷新订阅
+    """
     try:
-        from qwen_ai.vless_proxy import init_subscription_pool_from_env
-        
+        from qwen_ai.vless_proxy import get_subscription_pool
+        from qwen_ai.node_storage import get_node_storage, init_node_storage
+        from qwen_ai.node_tester import get_node_tester, init_node_tester
+        from qwen_ai.subscription import get_subscription_manager
+
         print("[Proxy] 初始化订阅代理池...")
-        pool = await init_subscription_pool_from_env()
-        
+        pool = get_subscription_pool()
+
+        # 初始化各个组件（不从订阅获取节点）
+        pool._subscription_manager = get_subscription_manager()
+        pool._node_storage = await init_node_storage()
+        pool._node_tester = await init_node_tester()
+        pool._initialized = True
+
+        # 检查本地是否有可用节点
+        stats = pool.get_stats()
+        available = stats.get('current_pattern', {}).get('available', 0)
+
+        if refresh:
+            print("[Proxy] 强制刷新订阅...")
+            await pool.refresh_subscriptions(test_nodes=True)
+        elif available == 0:
+            print("[Proxy] 本地无可用节点，自动刷新订阅...")
+            await pool.refresh_subscriptions(test_nodes=True)
+        else:
+            print(f"[Proxy] 从本地加载 {available} 个可用节点")
+
         stats = pool.get_stats()
         print(f"[Proxy] 代理池初始化完成")
         print(f"[Proxy] 当前规则: {stats.get('pattern', 'N/A')}")
         print(f"[Proxy] 可用节点: {stats.get('current_pattern', {}).get('available', 0)}")
-        
+
         return pool
     except Exception as e:
         print(f"[Proxy] 代理池初始化失败: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -59,7 +87,8 @@ def main():
     parser.add_argument("--port", type=int, default=None, help="Port to bind (default: from env or 8000)")
     parser.add_argument("--reload", action="store_true", help="Enable auto-reload for development")
     parser.add_argument("--no-proxy", action="store_true", help="Disable proxy even if configured")
-    
+    parser.add_argument("--refresh-proxy", action="store_true", help="Force refresh proxy subscriptions on start")
+
     args = parser.parse_args()
     
     print("=" * 60)
@@ -84,7 +113,7 @@ def main():
             
             # 初始化代理池
             try:
-                asyncio.run(init_proxy_pool())
+                asyncio.run(init_proxy_pool(refresh=args.refresh_proxy))
             except Exception as e:
                 print(f"[Proxy] 警告: 代理池初始化失败: {e}")
         else:

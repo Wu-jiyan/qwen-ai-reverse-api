@@ -89,18 +89,27 @@ class QwenAiAdapter:
         return headers
     
     def map_model(self, openai_model: str) -> str:
-        """Map OpenAI model name to Qwen AI model name"""
-        model = openai_model
-        force_thinking = None
+        """Map OpenAI model name to Qwen AI model name
         
-        if model.endswith('-thinking'):
-            force_thinking = True
+        Supports thinking mode suffixes:
+        - -think: Thinking mode (thinking_mode="Thinking")
+        - -fast: Fast mode (thinking_mode="Fast")
+        - no suffix: Auto mode (thinking_mode="Auto")
+        """
+        model = openai_model
+        thinking_mode = "Auto"  # 默认自动模式
+        
+        if model.endswith('-think'):
+            thinking_mode = "Thinking"
+            model = model[:-6]
+        elif model.endswith('-thinking'):
+            thinking_mode = "Thinking"
             model = model[:-9]
         elif model.endswith('-fast'):
-            force_thinking = False
+            thinking_mode = "Fast"
             model = model[:-5]
         
-        self._force_thinking = force_thinking
+        self._thinking_mode = thinking_mode
         
         lower_model = model.lower()
         
@@ -167,33 +176,35 @@ class QwenAiAdapter:
         
         return data.get('success', False)
     
-    def chat_completion(self, model: str, messages: list, stream: bool = True, 
-                      temperature: Optional[float] = None, enable_thinking: Optional[bool] = None, 
+    def chat_completion(self, model: str, messages: list, stream: bool = True,
+                      temperature: Optional[float] = None, enable_thinking: Optional[bool] = None,
                       thinking_budget: Optional[int] = None,
-                      auto_delete_chat: bool = False) -> Tuple[requests.Response, str, Optional[str]]:
+                      auto_delete_chat: bool = False,
+                      reasoning_mode: Optional[str] = None) -> Tuple[requests.Response, str, Optional[str]]:
         """Send chat completion request
-        
+
         Args:
             auto_delete_chat: Whether to delete the chat after completion
+            reasoning_mode: Thinking mode - "Auto", "Fast", or "Thinking"
         """
         if not self.token:
             raise ValueError('Qwen AI token not configured')
-        
+
         model_id = self.map_model(model)
-        
-        # Detect thinking mode from model name
-        model_lower = model.lower()
-        force_thinking = None
-        if model.endswith('-thinking'):
-            force_thinking = True
-        elif model.endswith('-fast'):
-            force_thinking = False
-        elif 'think' in model_lower or 'r1' in model_lower:
-            force_thinking = True
-        else:
-            force_thinking = self._force_thinking
-        
-        should_enable_thinking = force_thinking if force_thinking is not None else (enable_thinking is True)
+
+        # Determine thinking mode (priority: reasoning_mode param > model suffix > default)
+        thinking_mode = reasoning_mode or getattr(self, '_thinking_mode', 'Auto')
+
+        # Map thinking mode to feature_config values
+        if thinking_mode == 'Fast':
+            auto_thinking = False
+            thinking_enabled = False
+        elif thinking_mode == 'Thinking':
+            auto_thinking = False
+            thinking_enabled = True
+        else:  # Auto
+            auto_thinking = True
+            thinking_enabled = True
         
         # Create new chat
         chat_id = self.create_chat(model_id, 'OpenAI_API_Chat')
@@ -222,14 +233,15 @@ class QwenAiAdapter:
         ts = int(time.time())
         
         feature_config = {
-            'thinking_enabled': should_enable_thinking,
+            'thinking_enabled': thinking_enabled,
             'output_schema': 'phase',
             'research_mode': 'normal',
-            'auto_thinking': should_enable_thinking,
+            'auto_thinking': auto_thinking,
+            'thinking_mode': thinking_mode,
             'thinking_format': 'summary',
             'auto_search': False,
         }
-        
+
         if thinking_budget:
             feature_config['thinking_budget'] = thinking_budget
         

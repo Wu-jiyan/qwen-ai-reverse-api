@@ -98,6 +98,81 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 ### 画图功能
 ![画图功能](docs/4.png)
 
+## 🔧 账号工具
+
+### 获取 JWT Token
+
+如果你已有账号，可以直接获取 JWT Token：
+
+```bash
+# 登录获取 JWT
+python get_jwt.py -e your_email@example.com -p your_password
+
+# 使用代理
+python get_jwt.py -e your_email@example.com -p your_password --proxy http://proxy:port
+```
+
+如果账号需要激活，脚本会显示激活链接并保存激活信息。
+
+### 账号注册
+
+提供自动注册 Qwen AI 账号的功能，支持手动激活和 IMAP 自动激活。
+
+### 手动注册模式
+
+```bash
+# 注册账号（需要手动点击激活链接）
+python register_account.py -e your_email@example.com -n your_name -p your_password
+
+# 注册并等待激活后继续
+python register_account.py -e your_email@example.com -n your_name -p your_password --auto-continue
+```
+
+### 自动注册模式（需要 IMAP）
+
+```bash
+# 使用 IMAP 自动读取激活邮件
+python register_account.py -e your_email@example.com -n your_name -p your_password \
+    --imap-host imap.qq.com \
+    --imap-user your_qq@qq.com \
+    --imap-pass your_auth_code
+```
+
+### 批量注册
+
+创建 `accounts.json` 文件：
+```json
+[
+  {"email": "user1@example.com", "name": "user1", "password": "pass1"},
+  {"email": "user2@example.com", "name": "user2", "password": "pass2"}
+]
+```
+
+执行批量注册：
+```bash
+python register_account.py --batch-file accounts.json \
+    --imap-host imap.qq.com \
+    --imap-user your_qq@qq.com \
+    --imap-pass your_auth_code
+```
+
+### 注册结果
+
+注册成功后会生成 `account_xxx.json` 文件，包含：
+- JWT Token（可直接用于 API 调用）
+- 账号信息
+
+JWT Token 可以直接用于 API 认证：
+```bash
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer <JWT_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3.5-plus",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
+```
+
 ## 📖 API 文档
 
 ### 对话补全
@@ -462,9 +537,12 @@ qwen-ai-reverse-api/
 │   ├── vless_proxy.py     # Vless 代理池
 │   ├── subscription.py    # 订阅管理
 │   ├── node_storage.py    # 节点存储
-│   └── node_tester.py     # 节点测试
+│   ├── node_tester.py     # 节点测试
+│   └── account_register.py # 账号注册模块
 ├── server.py              # FastAPI 服务
 ├── start_server.py        # 启动脚本
+├── register_account.py    # 账号注册工具
+├── get_jwt.py            # JWT 获取工具
 ├── requirements.txt       # 依赖
 ├── .env.example           # 环境变量示例
 ├── proxy_config.example.txt # 代理配置示例

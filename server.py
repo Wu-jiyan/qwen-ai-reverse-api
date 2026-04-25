@@ -136,6 +136,7 @@ async def startup_event():
 
 
 SUPPORTED_MODELS = [
+    # 基础模型 - 自动模式
     "qwen3.6-plus",
     "qwen3.5-plus",
     "qwen3.5-omni-plus",
@@ -154,6 +155,24 @@ SUPPORTED_MODELS = [
     "qwen3-vl-235b-a22b",
     "qwen3-omni-flash",
     "qwen2.5-max",
+    "qwen3.6-max-preview",
+    "qwen3.6-27b",
+    # 快速模式
+    "qwen3.6-plus-fast",
+    "qwen3.5-plus-fast",
+    "qwen3.5-flash-fast",
+    "qwen3-max-fast",
+    "qwen3-coder-fast",
+    "qwen3.6-max-preview-fast",
+    "qwen3.6-27b-fast",
+    # 思考模式
+    "qwen3.6-plus-think",
+    "qwen3.5-plus-think",
+    "qwen3.5-flash-think",
+    "qwen3-max-think",
+    "qwen3-coder-think",
+    "qwen3.6-max-preview-think",
+    "qwen3.6-27b-think",
 ]
 
 
@@ -196,19 +215,24 @@ async def chat_completions(
 
         existing_chat_id = request.chat_id
 
+        # Extract reasoning_mode from extra_body if provided
+        reasoning_mode = None
+        if hasattr(request, 'extra_body') and request.extra_body:
+            reasoning_mode = request.extra_body.get('reasoning_mode')
+
         if request.stream:
             return StreamingResponse(
-                openai_stream(client, request.model, request.messages, request.temperature, existing_chat_id, AUTO_DELETE_CHAT),
+                openai_stream(client, request.model, request.messages, request.temperature, existing_chat_id, AUTO_DELETE_CHAT, reasoning_mode),
                 media_type="text/event-stream"
             )
         else:
-            return await openai_non_stream(client, request.model, request.messages, request.temperature, existing_chat_id, AUTO_DELETE_CHAT)
+            return await openai_non_stream(client, request.model, request.messages, request.temperature, existing_chat_id, AUTO_DELETE_CHAT, reasoning_mode)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def openai_non_stream(client, model, messages, temperature, existing_chat_id=None, auto_delete_chat=False):
+async def openai_non_stream(client, model, messages, temperature, existing_chat_id=None, auto_delete_chat=False, reasoning_mode=None):
     """Non-streaming response with context support"""
     chat_id = existing_chat_id
     chat_created = False
@@ -220,7 +244,8 @@ async def openai_non_stream(client, model, messages, temperature, existing_chat_
                 messages=messages,
                 stream=True,
                 temperature=temperature,
-                auto_delete_chat=auto_delete_chat
+                auto_delete_chat=auto_delete_chat,
+                reasoning_mode=reasoning_mode
             )
             chat_id = new_chat_id
             chat_created = True
@@ -230,7 +255,8 @@ async def openai_non_stream(client, model, messages, temperature, existing_chat_
                 messages=messages,
                 stream=True,
                 temperature=temperature,
-                auto_delete_chat=auto_delete_chat
+                auto_delete_chat=auto_delete_chat,
+                reasoning_mode=reasoning_mode
             )
             chat_created = True
 
@@ -305,7 +331,7 @@ async def openai_non_stream(client, model, messages, temperature, existing_chat_
         raise
 
 
-def openai_stream(client, model, messages, temperature, existing_chat_id=None, auto_delete_chat=False):
+def openai_stream(client, model, messages, temperature, existing_chat_id=None, auto_delete_chat=False, reasoning_mode=None):
     """Streaming response with context support, thinking and image generation"""
     chat_id = existing_chat_id
     created = int(time.time())
@@ -313,7 +339,7 @@ def openai_stream(client, model, messages, temperature, existing_chat_id=None, a
     reasoning_content = ''
     has_sent_role = False
     chat_created = False
-    
+
     try:
         if chat_id:
             # Continue existing chat
@@ -322,7 +348,8 @@ def openai_stream(client, model, messages, temperature, existing_chat_id=None, a
                 messages=messages,
                 stream=True,
                 temperature=temperature,
-                auto_delete_chat=auto_delete_chat
+                auto_delete_chat=auto_delete_chat,
+                reasoning_mode=reasoning_mode
             )
             chat_id = new_chat_id
             chat_created = True
@@ -333,7 +360,8 @@ def openai_stream(client, model, messages, temperature, existing_chat_id=None, a
                 messages=messages,
                 stream=True,
                 temperature=temperature,
-                auto_delete_chat=auto_delete_chat
+                auto_delete_chat=auto_delete_chat,
+                reasoning_mode=reasoning_mode
             )
             chat_created = True
 
