@@ -6,6 +6,10 @@
 
 基于 Qwen AI (chat.qwen.ai) 的逆向 API，提供 OpenAI 兼容接口。
 
+## 🔗 相关项目
+
+- [DeepSeek Reverse API](https://github.com/Wu-jiyan/deepseek-reverse-api) - DeepSeek 网页端 逆向 API
+
 ## ✨ 功能特性
 
 - 🔌 **OpenAI 兼容** - 与 OpenAI SDK 完全兼容的接口
