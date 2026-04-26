@@ -694,6 +694,8 @@ class SubscriptionProxyPool:
 # 全局代理池实例
 _global_proxy_pool: Optional[VlessProxyPool] = None
 _global_subscription_pool: Optional[SubscriptionProxyPool] = None
+_proxy_pool_initialized = False
+_subscription_pool_initialized = False
 
 
 def get_proxy_pool() -> VlessProxyPool:
@@ -714,8 +716,14 @@ def get_subscription_pool() -> SubscriptionProxyPool:
 
 
 def init_proxy_pool_from_env() -> VlessProxyPool:
-    """从环境变量初始化代理池"""
+    """从环境变量初始化代理池（只初始化一次）"""
+    global _proxy_pool_initialized
     pool = get_proxy_pool()
+    
+    # 避免重复初始化
+    if _proxy_pool_initialized:
+        return pool
+    
     pool.add_proxies_from_env('VLESS_PROXIES')
     
     # 也检查 VLESS_PROXY_FILE 环境变量
@@ -724,12 +732,19 @@ def init_proxy_pool_from_env() -> VlessProxyPool:
     if proxy_file:
         pool.add_proxies_from_file(proxy_file)
     
+    _proxy_pool_initialized = True
     return pool
 
 
 async def init_subscription_pool_from_env() -> SubscriptionProxyPool:
-    """从环境变量初始化订阅代理池"""
+    """从环境变量初始化订阅代理池（只初始化一次）"""
+    global _subscription_pool_initialized
     pool = get_subscription_pool()
+    
+    # 避免重复初始化
+    if _subscription_pool_initialized:
+        return pool
+    
     await pool.init()
     
     # 检查是否需要立即刷新
@@ -738,4 +753,5 @@ async def init_subscription_pool_from_env() -> SubscriptionProxyPool:
     if auto_refresh:
         await pool.refresh_subscriptions(test_nodes=True)
     
+    _subscription_pool_initialized = True
     return pool

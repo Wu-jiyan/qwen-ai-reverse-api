@@ -217,8 +217,15 @@ async def chat_completions(
 
         # Extract reasoning_mode from extra_body if provided
         reasoning_mode = None
-        if hasattr(request, 'extra_body') and request.extra_body:
-            reasoning_mode = request.extra_body.get('reasoning_mode')
+        try:
+            extra_body = getattr(request, 'extra_body', None)
+            if extra_body is None:
+                # Try to get from model_extra (Pydantic v2) or __dict__
+                extra_body = getattr(request, 'model_extra', None) or request.__dict__.get('extra_body')
+            if extra_body and isinstance(extra_body, dict):
+                reasoning_mode = extra_body.get('reasoning_mode')
+        except Exception:
+            reasoning_mode = None
 
         if request.stream:
             return StreamingResponse(
@@ -331,14 +338,16 @@ async def openai_non_stream(client, model, messages, temperature, existing_chat_
         raise
 
 
-def openai_stream(client, model, messages, temperature, existing_chat_id=None, auto_delete_chat=False, reasoning_mode=None):
-    """Streaming response with context support, thinking and image generation"""
+def openai_stream(client, model, messages, temperature, existing_chat_id=None,
+                 auto_delete_chat=False, reasoning_mode=None):
+    """Streaming response with context support"""
     chat_id = existing_chat_id
     created = int(time.time())
     full_content = ''
     reasoning_content = ''
     has_sent_role = False
     chat_created = False
+    image_gen_finished = False  # 标记画图是否已完成，避免重复输出
 
     try:
         if chat_id:
@@ -440,9 +449,13 @@ def openai_stream(client, model, messages, temperature, existing_chat_id=None, a
                 
                 # Handle image_gen_tool phase - image generation
                 elif phase == 'image_gen_tool':
+                    # 如果已经处理过画图结果，跳过重复处理
+                    if image_gen_finished:
+                        break
+
                     function_call = qwen_delta.get('function_call', {})
                     function_id = qwen_delta.get('function_id', '')
-                    
+
                     if function_call.get('name') == 'image_gen':
                         # Send tool call start
                         openai_chunk['choices'][0]['delta'] = {
@@ -457,12 +470,11 @@ def openai_stream(client, model, messages, temperature, existing_chat_id=None, a
                             }]
                         }
                         yield f'data: {json.dumps(openai_chunk)}\n\n'
-                    
+
                     # Handle image generation result
                     if status == 'finished' and extra.get('tool_result'):
-                        tool_result = extra['tool_result']
                         image_list = extra.get('image_list', [])
-                        
+
                         # Send image URLs in content
                         if image_list:
                             image_urls = [img.get('image', '') for img in image_list if img.get('image')]
@@ -471,9 +483,36 @@ def openai_stream(client, model, messages, temperature, existing_chat_id=None, a
                                 openai_chunk['choices'][0]['delta'] = {'content': image_content}
                                 full_content += image_content
                                 yield f'data: {json.dumps(openai_chunk)}\n\n'
-                
+
+                        # 标记画图已完成
+                        image_gen_finished = True
+
+                        # 发送结束信号
+                        openai_chunk['choices'][0]['delta'] = {}
+                        openai_chunk['choices'][0]['finish_reason'] = 'stop'
+                        yield f'data: {json.dumps(openai_chunk)}\n\n'
+                        yield 'data: [DONE]\n\n'
+
+                        # Handle auto delete or session save
+                        if auto_delete_chat and chat_created and chat_id:
+                            try:
+                                client.adapter.delete_chat(chat_id)
+                                print(f'[Server] Auto-deleted chat: {chat_id}')
+                            except Exception as e:
+                                print(f'[Server] Failed to auto-delete chat {chat_id}: {e}')
+                        else:
+                            # Save session for context
+                            session_manager.set(chat_id, model, messages + [{'role': 'assistant', 'content': full_content}])
+                        break
+
                 # Handle regular content (answer phase)
                 elif phase == 'answer' or phase is None:
+                    # 如果画图已经完成，跳过 answer 阶段的内容
+                    if image_gen_finished:
+                        # 只处理 finished 状态来结束循环
+                        if status == 'finished':
+                            break
+                        continue
                     if content:
                         openai_chunk['choices'][0]['delta'] = {'content': content}
                         full_content += content

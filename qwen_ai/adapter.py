@@ -59,12 +59,32 @@ class QwenAiAdapter:
         self._force_thinking = None
         self.use_proxy = use_proxy
         
-        # 初始化代理管理器
+        # 初始化代理管理器（使用单例模式，避免重复初始化）
         if use_proxy:
-            self.proxy_manager = init_proxy_manager()
+            self.proxy_manager = get_proxy_manager()
+            # 如果代理管理器未初始化，则初始化
+            if not hasattr(self.proxy_manager, '_initialized') or not self.proxy_manager._initialized:
+                self.proxy_manager = init_proxy_manager()
+                self.proxy_manager._initialized = True
             self.session = self.proxy_manager.create_session(use_vless=True)
         else:
             self.session = requests.Session()
+            # 配置连接池以提高性能
+            from requests.adapters import HTTPAdapter
+            from urllib3.util.retry import Retry
+            
+            # 创建带连接池的 adapter
+            adapter = HTTPAdapter(
+                pool_connections=10,
+                pool_maxsize=10,
+                max_retries=Retry(
+                    total=3,
+                    backoff_factor=0.5,
+                    status_forcelist=[500, 502, 503, 504]
+                )
+            )
+            self.session.mount('https://', adapter)
+            self.session.mount('http://', adapter)
         
         self.session.timeout = 120
     
@@ -121,6 +141,9 @@ class QwenAiAdapter:
     
     def create_chat(self, model_id: str, title: str = 'New Chat') -> str:
         """Create a new chat"""
+        import time
+        start_time = time.time()
+        
         url = f'{self.QWEN_AI_BASE}/api/v2/chats/new'
         payload = {
             'title': title,
@@ -141,9 +164,12 @@ class QwenAiAdapter:
         response.raise_for_status()
         data = response.json()
         
+        elapsed = (time.time() - start_time) * 1000
+        print(f"[Perf] create_chat API 调用耗时: {elapsed:.0f}ms", flush=True)
+
         if not data.get('data', {}).get('id'):
-            raise ValueError('Failed to create chat: no chat ID returned')
-        
+            raise ValueError(f'Failed to create chat: no chat ID returned. Response: {data}')
+
         return data['data']['id']
     
     def delete_chat(self, chat_id: str) -> bool:
@@ -208,22 +234,43 @@ class QwenAiAdapter:
         
         # Create new chat
         chat_id = self.create_chat(model_id, 'OpenAI_API_Chat')
-        
-        # Build conversation content from all messages
+
+        # Build conversation content from all messages using new format
         system_content = ''
         conversation_parts = []
-        
+        current_user_msg = None
+
         for msg in messages:
             if msg['role'] == 'system':
                 system_content += (system_content + '\n\n' if system_content else '') + msg['content']
             elif msg['role'] == 'user':
-                conversation_parts.append(f"User: {msg['content']}")
+                # 如果之前有未配对的用户消息，先保存它
+                if current_user_msg is not None:
+                    conversation_parts.append(current_user_msg)
+                current_user_msg = msg['content']
             elif msg['role'] == 'assistant':
-                conversation_parts.append(f"Assistant: {msg['content']}")
-        
+                # 将用户消息和AI回复配对
+                if current_user_msg is not None:
+                    paired = f"{current_user_msg}<｜Assistant｜>{msg['content']}<｜end of sentence｜>"
+                    conversation_parts.append(paired)
+                    current_user_msg = None
+                else:
+                    # 如果没有对应的用户消息，单独添加AI回复
+                    conversation_parts.append(f"<｜Assistant｜>{msg['content']}<｜end of sentence｜>")
+
+        # 如果最后还有未配对的用户消息，添加它
+        if current_user_msg is not None:
+            conversation_parts.append(current_user_msg)
+
         # Combine all messages into user_content
-        user_content = '\n\n'.join(conversation_parts)
-        
+        if len(conversation_parts) > 1:
+            # 多轮对话，用 <｜User｜> 连接
+            user_content = '<｜User｜>'.join(conversation_parts)
+        elif len(conversation_parts) == 1:
+            user_content = conversation_parts[0]
+        else:
+            user_content = ''
+
         # Prepend system content
         if system_content:
             user_content = f'{system_content}\n\n{user_content}'

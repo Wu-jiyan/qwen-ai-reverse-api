@@ -417,18 +417,27 @@ class ProxyManager:
 
 # 全局代理管理器
 _global_proxy_manager: Optional[ProxyManager] = None
+_proxy_manager_lock = threading.Lock()
 
 
 def get_proxy_manager() -> ProxyManager:
-    """获取全局代理管理器"""
+    """获取全局代理管理器（线程安全）"""
     global _global_proxy_manager
     if _global_proxy_manager is None:
-        _global_proxy_manager = ProxyManager()
+        with _proxy_manager_lock:
+            if _global_proxy_manager is None:
+                _global_proxy_manager = ProxyManager()
     return _global_proxy_manager
 
 
 def init_proxy_manager() -> ProxyManager:
-    """初始化全局代理管理器（从环境变量）"""
+    """初始化全局代理管理器（从环境变量，线程安全）"""
     global _global_proxy_manager
-    _global_proxy_manager = ProxyManager().init_from_env()
+    with _proxy_manager_lock:
+        if _global_proxy_manager is None:
+            _global_proxy_manager = ProxyManager()
+        # 检查是否已经初始化过
+        if not hasattr(_global_proxy_manager, '_initialized') or not _global_proxy_manager._initialized:
+            _global_proxy_manager.init_from_env()
+            _global_proxy_manager._initialized = True
     return _global_proxy_manager

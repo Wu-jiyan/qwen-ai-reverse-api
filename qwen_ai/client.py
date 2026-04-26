@@ -7,15 +7,16 @@ from .tool_parser import ToolParser
 
 class QwenAiClient:
     """Qwen AI Client with OpenAI compatible interface"""
-    
-    def __init__(self, token: str, cookies: Optional[str] = None):
+
+    def __init__(self, token: str, cookies: Optional[str] = None, use_proxy: bool = True):
         """Initialize Qwen AI Client
-        
+
         Args:
             token: JWT token from chat.qwen.ai Local Storage
             cookies: Optional cookies string for enhanced compatibility
+            use_proxy: Whether to use proxy (Vless or HTTP proxy)
         """
-        self.adapter = QwenAiAdapter(token, cookies)
+        self.adapter = QwenAiAdapter(token, cookies, use_proxy=use_proxy)
     
     def chat_completions(self, model: str, messages: List[Dict], stream: bool = False,
                         temperature: Optional[float] = None, tools: Optional[List[Dict]] = None,
