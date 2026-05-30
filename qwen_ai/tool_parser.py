@@ -99,7 +99,7 @@ CRITICAL: Tool names are CASE-SENSITIVE. You MUST use the exact tool name as def
 When you decide to call a tool, you MUST respond with NOTHING except a single [function_calls] block exactly like the template below:
 
 [function_calls]
-[call:exact_tool_name_from_list]{"argument": "value"}[/call]
+[call:exact_tool_name_from_list]{{"argument": "value"}}[/call]
 [/function_calls]
 
 CRITICAL RULES:
