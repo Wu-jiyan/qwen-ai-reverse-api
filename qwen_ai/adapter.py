@@ -255,28 +255,43 @@ class QwenAiAdapter:
         # Create new chat
         chat_id = self.create_chat(model_id, 'OpenAI_API_Chat')
 
+        def _extract_text(content):
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                parts = []
+                for item in content:
+                    if isinstance(item, dict):
+                        if item.get('type') == 'text':
+                            parts.append(item.get('text', ''))
+                        elif item.get('type') == 'image_url':
+                            parts.append('[Image]')
+                return '\n'.join(parts)
+            return str(content)
+
         # Build conversation content from all messages using new format
         system_content = ''
         conversation_parts = []
         current_user_msg = None
 
         for msg in processed_messages:
+            msg_content = _extract_text(msg.get('content', ''))
             if msg['role'] == 'system':
-                system_content += (system_content + '\n\n' if system_content else '') + msg['content']
+                system_content += (system_content + '\n\n' if system_content else '') + msg_content
             elif msg['role'] == 'user':
                 # 如果之前有未配对的用户消息，先保存它
                 if current_user_msg is not None:
                     conversation_parts.append(current_user_msg)
-                current_user_msg = msg['content']
+                current_user_msg = msg_content
             elif msg['role'] == 'assistant':
                 # 将用户消息和AI回复配对
                 if current_user_msg is not None:
-                    paired = f"{current_user_msg}<｜Assistant｜>{msg['content']}<｜end of sentence｜>"
+                    paired = f"{current_user_msg}<｜Assistant｜>{msg_content}<｜end of sentence｜>"
                     conversation_parts.append(paired)
                     current_user_msg = None
                 else:
                     # 如果没有对应的用户消息，单独添加AI回复
-                    conversation_parts.append(f"<｜Assistant｜>{msg['content']}<｜end of sentence｜>")
+                    conversation_parts.append(f"<｜Assistant｜>{msg_content}<｜end of sentence｜>")
 
         # 如果最后还有未配对的用户消息，添加它
         if current_user_msg is not None:

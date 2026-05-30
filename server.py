@@ -546,9 +546,11 @@ def openai_stream(client, model, messages, temperature, existing_chat_id=None,
                             break
                         continue
                     if content:
-                        openai_chunk['choices'][0]['delta'] = {'content': content}
                         full_content += content
-                        yield f'data: {json.dumps(openai_chunk)}\n\n'
+                        # 检测到 tool call 标记后停止输出文本，只累积
+                        if '[function_calls]' not in full_content:
+                            openai_chunk['choices'][0]['delta'] = {'content': content}
+                            yield f'data: {json.dumps(openai_chunk)}\n\n'
                     
                     # Final chunk
                     if status == 'finished':
