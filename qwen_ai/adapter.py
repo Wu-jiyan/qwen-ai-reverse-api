@@ -206,15 +206,35 @@ class QwenAiAdapter:
                       temperature: Optional[float] = None, enable_thinking: Optional[bool] = None,
                       thinking_budget: Optional[int] = None,
                       auto_delete_chat: bool = False,
-                      reasoning_mode: Optional[str] = None) -> Tuple[requests.Response, str, Optional[str]]:
+                      reasoning_mode: Optional[str] = None,
+                      tools: Optional[list] = None) -> Tuple[requests.Response, str, Optional[str]]:
         """Send chat completion request
 
         Args:
             auto_delete_chat: Whether to delete the chat after completion
             reasoning_mode: Thinking mode - "Auto", "Fast", or "Thinking"
+            tools: OpenAI-compatible tools list for function calling
         """
         if not self.token:
             raise ValueError('Qwen AI token not configured')
+
+        # Inject tools as system prompt
+        processed_messages = messages
+        if tools:
+            from qwen_ai.tool_parser import ToolParser
+            has_tool_prompt = any(
+                msg.get('role') == 'system' and
+                ('Available Tools' in msg.get('content', '') or '<tools>' in msg.get('content', ''))
+                for msg in messages
+            )
+            if not has_tool_prompt:
+                tool_prompt = ToolParser.tools_to_system_prompt(tools)
+                processed_messages = messages.copy()
+                system_indices = [i for i, msg in enumerate(processed_messages) if msg.get('role') == 'system']
+                if system_indices:
+                    processed_messages[system_indices[0]]['content'] = processed_messages[system_indices[0]]['content'] + '\n\n' + tool_prompt
+                else:
+                    processed_messages.insert(0, {'role': 'system', 'content': tool_prompt})
 
         model_id = self.map_model(model)
 
@@ -240,7 +260,7 @@ class QwenAiAdapter:
         conversation_parts = []
         current_user_msg = None
 
-        for msg in messages:
+        for msg in processed_messages:
             if msg['role'] == 'system':
                 system_content += (system_content + '\n\n' if system_content else '') + msg['content']
             elif msg['role'] == 'user':

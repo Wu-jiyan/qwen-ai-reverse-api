@@ -232,17 +232,17 @@ async def chat_completions(
 
         if request.stream:
             return StreamingResponse(
-                openai_stream(client, request.model, request.messages, request.temperature, existing_chat_id, AUTO_DELETE_CHAT, reasoning_mode),
+                openai_stream(client, request.model, request.messages, request.temperature, existing_chat_id, AUTO_DELETE_CHAT, reasoning_mode, request.tools),
                 media_type="text/event-stream"
             )
         else:
-            return await openai_non_stream(client, request.model, request.messages, request.temperature, existing_chat_id, AUTO_DELETE_CHAT, reasoning_mode)
+            return await openai_non_stream(client, request.model, request.messages, request.temperature, existing_chat_id, AUTO_DELETE_CHAT, reasoning_mode, request.tools)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def openai_non_stream(client, model, messages, temperature, existing_chat_id=None, auto_delete_chat=False, reasoning_mode=None):
+async def openai_non_stream(client, model, messages, temperature, existing_chat_id=None, auto_delete_chat=False, reasoning_mode=None, tools=None):
     """Non-streaming response with context support"""
     chat_id = existing_chat_id
     chat_created = False
@@ -255,7 +255,8 @@ async def openai_non_stream(client, model, messages, temperature, existing_chat_
                 stream=True,
                 temperature=temperature,
                 auto_delete_chat=auto_delete_chat,
-                reasoning_mode=reasoning_mode
+                reasoning_mode=reasoning_mode,
+                tools=tools
             )
             chat_id = new_chat_id
             chat_created = True
@@ -266,7 +267,8 @@ async def openai_non_stream(client, model, messages, temperature, existing_chat_
                 stream=True,
                 temperature=temperature,
                 auto_delete_chat=auto_delete_chat,
-                reasoning_mode=reasoning_mode
+                reasoning_mode=reasoning_mode,
+                tools=tools
             )
             chat_created = True
 
@@ -304,6 +306,12 @@ async def openai_non_stream(client, model, messages, temperature, existing_chat_
             except:
                 pass
 
+        # Check for tool calls
+        tool_calls = None
+        if '[function_calls]' in content:
+            from qwen_ai.tool_parser import ToolParser
+            tool_calls = ToolParser.parse_tool_use(content)
+
         # Handle auto delete or session save
         if auto_delete_chat and chat_created and chat_id:
             try:
@@ -313,6 +321,25 @@ async def openai_non_stream(client, model, messages, temperature, existing_chat_
                 print(f'[Server] Failed to auto-delete chat {chat_id}: {e}')
         else:
             session_manager.set(chat_id, model, messages + [{'role': 'assistant', 'content': content}])
+
+        if tool_calls:
+            return JSONResponse(content={
+                'id': response_id or '',
+                'object': 'chat.completion',
+                'created': created,
+                'model': model,
+                'chat_id': chat_id if not auto_delete_chat else None,
+                'choices': [{
+                    'index': 0,
+                    'message': {
+                        'role': 'assistant',
+                        'content': None,
+                        'tool_calls': tool_calls
+                    },
+                    'finish_reason': 'tool_calls'
+                }],
+                'usage': {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2}
+            })
 
         return JSONResponse(content={
             'id': response_id or '',
@@ -342,7 +369,7 @@ async def openai_non_stream(client, model, messages, temperature, existing_chat_
 
 
 def openai_stream(client, model, messages, temperature, existing_chat_id=None,
-                 auto_delete_chat=False, reasoning_mode=None):
+                 auto_delete_chat=False, reasoning_mode=None, tools=None):
     """Streaming response with context support"""
     chat_id = existing_chat_id
     created = int(time.time())
@@ -361,7 +388,8 @@ def openai_stream(client, model, messages, temperature, existing_chat_id=None,
                 stream=True,
                 temperature=temperature,
                 auto_delete_chat=auto_delete_chat,
-                reasoning_mode=reasoning_mode
+                reasoning_mode=reasoning_mode,
+                tools=tools
             )
             chat_id = new_chat_id
             chat_created = True
@@ -373,7 +401,8 @@ def openai_stream(client, model, messages, temperature, existing_chat_id=None,
                 stream=True,
                 temperature=temperature,
                 auto_delete_chat=auto_delete_chat,
-                reasoning_mode=reasoning_mode
+                reasoning_mode=reasoning_mode,
+                tools=tools
             )
             chat_created = True
 
@@ -523,10 +552,56 @@ def openai_stream(client, model, messages, temperature, existing_chat_id=None,
                     
                     # Final chunk
                     if status == 'finished':
+                        # Check for tool calls
+                        if '[function_calls]' in full_content:
+                            from qwen_ai.tool_parser import ToolParser
+                            parsed_tool_calls = ToolParser.parse_tool_use(full_content)
+                            if parsed_tool_calls:
+                                for i, tc in enumerate(parsed_tool_calls):
+                                    tool_chunk = {
+                                        'id': response_id or '',
+                                        'model': model,
+                                        'object': 'chat.completion.chunk',
+                                        'choices': [{
+                                            'index': 0,
+                                            'delta': {
+                                                'tool_calls': [{
+                                                    'index': i,
+                                                    'id': tc['id'],
+                                                    'type': 'function',
+                                                    'function': {
+                                                        'name': tc['function']['name'],
+                                                        'arguments': tc['function']['arguments'],
+                                                    },
+                                                }],
+                                            },
+                                            'finish_reason': None,
+                                        }],
+                                        'created': created,
+                                    }
+                                    yield f'data: {json.dumps(tool_chunk)}\n\n'
+
+                                finish_chunk = {
+                                    'id': response_id or '',
+                                    'model': model,
+                                    'object': 'chat.completion.chunk',
+                                    'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'tool_calls'}],
+                                    'usage': {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2},
+                                    'created': created,
+                                }
+                                yield f'data: {json.dumps(finish_chunk)}\n\n'
+                                yield 'data: [DONE]\n\n'
+
+                                success = True
+                                # Don't save session on tool_calls - client needs to respond
+                                break
+
                         openai_chunk['choices'][0]['delta'] = {}
                         openai_chunk['choices'][0]['finish_reason'] = 'stop'
                         yield f'data: {json.dumps(openai_chunk)}\n\n'
                         yield 'data: [DONE]\n\n'
+
+                        success = True
 
                         # Handle auto delete or session save
                         if auto_delete_chat and chat_created and chat_id:
