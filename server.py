@@ -138,6 +138,7 @@ async def startup_event():
 SUPPORTED_MODELS = [
     # 基础模型 - 自动模式
     "qwen3.7-max",
+    "qwen3.7-plus",
     "qwen3.6-plus",
     "qwen3.5-plus",
     "qwen3.5-omni-plus",
@@ -160,6 +161,7 @@ SUPPORTED_MODELS = [
     "qwen3.6-27b",
     # 快速模式
     "qwen3.7-max-fast",
+    "qwen3.7-plus-fast",
     "qwen3.6-plus-fast",
     "qwen3.5-plus-fast",
     "qwen3.5-flash-fast",
@@ -169,6 +171,7 @@ SUPPORTED_MODELS = [
     "qwen3.6-27b-fast",
     # 思考模式
     "qwen3.7-max-think",
+    "qwen3.7-plus-think",
     "qwen3.6-plus-think",
     "qwen3.5-plus-think",
     "qwen3.5-flash-think",
@@ -548,7 +551,12 @@ def openai_stream(client, model, messages, temperature, existing_chat_id=None,
                     if content:
                         full_content += content
                         # 检测到 tool call 标记后停止输出文本，只累积
-                        if '[function_calls]' not in full_content:
+                        # 使用前缀匹配防止 [function_calls 跨 chunk 泄露
+                        MARKER = '[function_calls]'
+                        is_tool_content = any(
+                            full_content.endswith(MARKER[:i]) for i in range(1, len(MARKER) + 1)
+                        )
+                        if not is_tool_content:
                             openai_chunk['choices'][0]['delta'] = {'content': content}
                             yield f'data: {json.dumps(openai_chunk)}\n\n'
                     
@@ -595,8 +603,22 @@ def openai_stream(client, model, messages, temperature, existing_chat_id=None,
                                 yield 'data: [DONE]\n\n'
 
                                 success = True
-                                # Don't save session on tool_calls - client needs to respond
                                 break
+
+                            # Parsing failed but [function_calls] detected - treat as empty tool call
+                            # Don't save raw text to session to prevent loop
+                            finish_chunk = {
+                                'id': response_id or '',
+                                'model': model,
+                                'object': 'chat.completion.chunk',
+                                'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'tool_calls'}],
+                                'usage': {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2},
+                                'created': created,
+                            }
+                            yield f'data: {json.dumps(finish_chunk)}\n\n'
+                            yield 'data: [DONE]\n\n'
+                            success = True
+                            break
 
                         openai_chunk['choices'][0]['delta'] = {}
                         openai_chunk['choices'][0]['finish_reason'] = 'stop'

@@ -33,18 +33,31 @@ class ToolParser:
         
         # Parse bracket format: [function_calls][call:name]{"arg": "value"}[/call][/function_calls]
         if '[function_calls]' in content:
-            pattern = r'\[call:(\w+)\](\{[^\}]+\})\[/call\]'
-            matches = re.findall(pattern, content)
-            for i, (name, args) in enumerate(matches):
+            # Extract [call:...]...[/call] blocks
+            call_pattern = r'\[call:(\w+)\](.*?)\[/call\]'
+            calls = re.findall(call_pattern, content, re.DOTALL)
+            for i, (name, args_str) in enumerate(calls):
                 try:
-                    tool_calls.append({
-                        'id': f'tool_{i}',
-                        'function': {
-                            'name': name,
-                            'arguments': args
-                        }
-                    })
-                except json.JSONDecodeError:
+                    args_str = args_str.strip()
+                    # Try to parse as JSON, use raw string if not valid
+                    try:
+                        json.loads(args_str)
+                        tool_calls.append({
+                            'id': f'tool_{i}',
+                            'function': {
+                                'name': name,
+                                'arguments': args_str
+                            }
+                        })
+                    except json.JSONDecodeError:
+                        tool_calls.append({
+                            'id': f'tool_{i}',
+                            'function': {
+                                'name': name,
+                                'arguments': args_str
+                            }
+                        })
+                except Exception:
                     continue
         
         # Parse XML format: <tool_use><name>name</name><arguments>...</arguments></tool_use>
